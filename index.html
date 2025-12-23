@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Face State Game</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #000;
+  color: #fff;
+  text-align: center;
+}
+video, canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+#ui {
+  position: fixed;
+  bottom: 20px;
+  width: 100%;
+}
+button, select {
+  font-size: 16px;
+  padding: 10px 14px;
+  margin: 4px;
+}
+#state {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <div id="state">—</div>
+  <button id="beforeBtn">Before</button>
+  <button id="afterBtn">After</button>
+  <select id="lang">
+    <option value="en">EN</option>
+    <option value="pt">PT-BR</option>
+    <option value="ru">RU</option>
+  </select>
+</div>
+
+<script>
+/* ---------- i18n ---------- */
+const T = {
+  en: {
+    before: "Before",
+    after: "After",
+    relaxed: "Relaxed",
+    tense: "Tense"
+  },
+  pt: {
+    before: "Antes",
+    after: "Depois",
+    relaxed: "Relaxado",
+    tense: "Tenso"
+  },
+  ru: {
+    before: "До",
+    after: "После",
+    relaxed: "Расслаблено",
+    tense: "Напряжено"
+  }
+};
+
+let LANG = "en";
+const $ = id => document.getElementById(id);
+
+/* ---------- Face Mesh ---------- */
+const video = $("video");
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+
+let baseline = null;
+let lastState = "—";
+
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function analyze(face) {
+  const brow = dist(face[70], face[300]);
+  const eye = (dist(face[159], face[145]) + dist(face[386], face[374])) / 2;
+  const lips = dist(face[13], face[14]);
+  return { brow, eye, lips };
+}
+
+function classify(cur, base) {
+  let score = 0;
+  if (cur.brow < base.brow * 0.9) score++;
+  if (cur.eye < base.eye * 0.85) score++;
+  if (cur.lips < base.lips * 0.85) score++;
+  return score >= 2 ? "tense" : "relaxed";
+}
+
+const faceMesh = new FaceMesh({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+});
+
+faceMesh.setOptions({
+  maxNumFaces: 1,
+  refineLandmarks: true
+});
+
+faceMesh.onResults(res => {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  if (!res.multiFaceLandmarks) return;
+
+  const face = res.multiFaceLandmarks[0];
+  const cur = analyze(face);
+
+  if (baseline) {
+    lastState = classify(cur, baseline);
+    ctx.fillStyle = lastState === "tense"
+      ? "rgba(255,0,0,0.25)"
+      : "rgba(0,255,0,0.25)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    $("state").innerText = T[LANG][lastState];
+  }
+});
+
+const camera = new Camera(video, {
+  facingMode: "user",
+  onFrame: async () => {
+    await faceMesh.send({ image: video });
+  }
+});
+camera.start();
+
+/* ---------- UI ---------- */
+$("beforeBtn").onclick = () => {
+  baseline = null;
+  setTimeout(() => baseline = lastMetrics, 300);
+};
+
+let lastMetrics = null;
+faceMesh.onResults = (function(orig){
+  return function(res){
+    if (res.multiFaceLandmarks) {
+      lastMetrics = analyze(res.multiFaceLandmarks[0]);
+    }
+    orig(res);
+  };
+})(faceMesh.onResults);
+
+$("afterBtn").onclick = () => {};
+
+$("lang").onchange = e => {
+  LANG = e.target.value;
+  $("beforeBtn").innerText = T[LANG].before;
+  $("afterBtn").innerText = T[LANG].after;
+};
+</script>
+
+</body>
+</html>
