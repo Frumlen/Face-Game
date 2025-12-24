@@ -1,18 +1,18 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-<title>Smile Mirror</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Smile Training</title>
 
 <style>
 html,body{
   margin:0;
   padding:0;
-  background:#0a0b10;
+  background:#0b0c10;
   overflow:hidden;
   font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
-  color:#eaeaea;
+  color:#eee;
 }
 video,canvas{
   position:absolute;
@@ -23,29 +23,30 @@ video,canvas{
 }
 #ui{
   position:absolute;
-  bottom:26px;
+  bottom:24px;
   width:100%;
   text-align:center;
   pointer-events:none;
 }
-#phrase{
+#text{
   font-size:16px;
   opacity:0;
-  transition:opacity .4s ease;
+  transition:opacity .3s ease;
 }
-#settingsToggle{
+#langToggle{
   position:absolute;
   top:14px;
-  right:16px;
-  opacity:.35;
+  right:14px;
+  opacity:.4;
+  pointer-events:auto;
 }
-#settingsPanel{
+#langPanel{
   position:absolute;
-  top:52px;
-  right:16px;
-  background:rgba(20,20,24,.85);
-  border-radius:12px;
-  padding:10px;
+  top:48px;
+  right:14px;
+  background:rgba(20,20,24,.9);
+  border-radius:10px;
+  padding:8px;
   display:none;
 }
 select{
@@ -63,8 +64,8 @@ select{
 <video id="video" autoplay muted playsinline></video>
 <canvas id="canvas"></canvas>
 
-<div id="settingsToggle">⚙︎</div>
-<div id="settingsPanel">
+<div id="langToggle">🌐</div>
+<div id="langPanel">
   <select id="lang">
     <option value="ru">Русский</option>
     <option value="en">English</option>
@@ -72,7 +73,7 @@ select{
   </select>
 </div>
 
-<div id="ui"><div id="phrase"></div></div>
+<div id="ui"><div id="text"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -84,141 +85,9 @@ const TEXT = {
   en: "Natural smile",
   pt: "Sorriso natural"
 };
-let lang = "ru";
+let lang="ru";
 
 /* ================= Smile Logic ================= */
 class SmileAnalyzer{
   constructor(){
-    this.base=null;
-    this.ema=0;
-    this.alpha=0.15;
-    this.t0=performance.now();
-    this.hold=0;
-  }
-  update(lm){
-    const a=lm[61],b=lm[291];
-    const d=Math.hypot(a.x-b.x,a.y-b.y);
-
-    if(!this.base && performance.now()-this.t0<700){
-      this.base=this.base?(this.base+d)/2:d;
-      return 0;
-    }
-    if(!this.base)this.base=d;
-
-    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
-    const ratio=this.ema/this.base;
-
-    if(ratio>1.12){
-      this.hold=Math.min(this.hold+0.01,1);
-    }else{
-      this.hold=Math.max(this.hold-0.02,0);
-    }
-    return this.hold;
-  }
-}
-
-/* ================= Renderer ================= */
-const canvas=document.getElementById("canvas");
-const ctx=canvas.getContext("2d");
-
-function resize(){
-  canvas.width=innerWidth;
-  canvas.height=innerHeight;
-}
-resize();
-addEventListener("resize",resize);
-
-function drawSmileMask(lm,progress){
-  if(progress<=0)return;
-
-  const left=lm[61], right=lm[291];
-  const top=lm[13], bottom=lm[14];
-
-  const lx=left.x*canvas.width;
-  const rx=right.x*canvas.width;
-  const ty=top.y*canvas.height;
-  const by=bottom.y*canvas.height;
-
-  const cx=(lx+rx)/2;
-  const cy=(ty+by)/2;
-  const w=(rx-lx)*1.4;
-  const h=(by-ty)*1.6;
-
-  ctx.save();
-  ctx.globalAlpha=0.25+0.35*progress;
-  ctx.strokeStyle="rgba(200,220,255,0.9)";
-  ctx.lineWidth=2;
-  ctx.beginPath();
-  ctx.ellipse(cx,cy,w/2,h/2,0,0,Math.PI*2);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawMatchGlow(x,y,p){
-  if(p<0.6)return;
-  const r=140+120*p;
-  const g=ctx.createRadialGradient(x,y,r*0.3,x,y,r);
-  g.addColorStop(0,`rgba(255,255,255,${0.25*(p-0.6)})`);
-  g.addColorStop(1,"rgba(255,255,255,0)");
-  ctx.fillStyle=g;
-  ctx.beginPath();
-  ctx.arc(x,y,r,0,Math.PI*2);
-  ctx.fill();
-}
-
-/* ================= UI ================= */
-const phrase=document.getElementById("phrase");
-const settingsToggle=document.getElementById("settingsToggle");
-const settingsPanel=document.getElementById("settingsPanel");
-const langSelect=document.getElementById("lang");
-
-langSelect.onchange=e=>lang=e.target.value;
-settingsToggle.onclick=()=>{
-  settingsPanel.style.display=
-    settingsPanel.style.display==="block"?"none":"block";
-};
-
-/* ================= App ================= */
-const smile=new SmileAnalyzer();
-
-const mesh=new FaceMesh({
-  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
-});
-mesh.setOptions({
-  maxNumFaces:1,
-  refineLandmarks:true,
-  minDetectionConfidence:.6,
-  minTrackingConfidence:.6
-});
-
-mesh.onResults(r=>{
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  if(!r.multiFaceLandmarks){
-    smile.hold=0;
-    phrase.style.opacity=0;
-    return;
-  }
-
-  const lm=r.multiFaceLandmarks[0];
-  const p=smile.update(lm);
-
-  drawSmileMask(lm,p);
-
-  const cx=lm[1].x*canvas.width;
-  const cy=lm[1].y*canvas.height;
-  drawMatchGlow(cx,cy,p);
-
-  phrase.textContent=TEXT[lang];
-  phrase.style.opacity=p>0.25?1:0;
-});
-
-const video=document.getElementById("video");
-new Camera(video,{
-  facingMode:"user",
-  onFrame:async()=>mesh.send({image:video})
-}).start();
-</script>
-
-</body>
-</html>
+    this.base=nu
