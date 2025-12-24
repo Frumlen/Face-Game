@@ -1,68 +1,59 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
 <title>Smile Lens</title>
 
 <style>
-html, body {
-  margin: 0;
-  padding: 0;
-  background: #0b0c10;
-  overflow: hidden;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  color: #eaeaea;
+html,body{
+  margin:0;
+  padding:0;
+  background:#0b0c10;
+  overflow:hidden;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+  color:#eaeaea;
 }
-
-video, canvas {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+video,canvas{
+  position:absolute;
+  top:0;left:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
 }
-
-#ui {
-  position: absolute;
-  bottom: 24px;
-  width: 100%;
-  text-align: center;
-  pointer-events: none;
-  opacity: 0.8;
-  transition: opacity 0.4s ease;
+#ui{
+  position:absolute;
+  bottom:28px;
+  width:100%;
+  text-align:center;
+  pointer-events:none;
 }
-
-#phrase {
-  font-size: 16px;
-  letter-spacing: 0.3px;
+#phrase{
+  font-size:16px;
+  opacity:0;
+  transition:opacity .4s ease;
 }
-
-#settingsToggle {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  pointer-events: auto;
-  opacity: 0.4;
+#settingsToggle{
+  position:absolute;
+  top:14px;
+  right:16px;
+  opacity:.35;
 }
-
-#settingsPanel {
-  position: absolute;
-  top: 56px;
-  right: 16px;
-  background: rgba(20,20,24,0.85);
-  border-radius: 12px;
-  padding: 12px;
-  display: none;
-  pointer-events: auto;
+#settingsPanel{
+  position:absolute;
+  top:52px;
+  right:16px;
+  background:rgba(20,20,24,.85);
+  border-radius:12px;
+  padding:10px;
+  display:none;
 }
-
-select {
-  background: #111;
-  color: #eee;
-  border: none;
-  padding: 6px;
-  border-radius: 6px;
+select{
+  background:#111;
+  color:#eee;
+  border:none;
+  padding:6px;
+  border-radius:6px;
 }
 </style>
 </head>
@@ -73,189 +64,144 @@ select {
 <canvas id="canvas"></canvas>
 
 <div id="settingsToggle">⚙︎</div>
-
 <div id="settingsPanel">
   <select id="lang">
     <option value="en">English</option>
     <option value="pt">Português</option>
-    <option value="ru">Русский</option>
+    <option value="ru" selected>Русский</option>
   </select>
 </div>
 
-<div id="ui">
-  <div id="phrase"></div>
-</div>
+<div id="ui"><div id="phrase"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ===============================
-   Localization
-================================ */
-const TEXT = {
-  en: { calm: "", smile: "Natural smile" },
-  pt: { calm: "", smile: "Sorriso natural" },
-  ru: { calm: "", smile: "Естественная улыбка" }
+/* ===== Text ===== */
+const TEXT={
+  en:{smile:"Natural smile"},
+  pt:{smile:"Sorriso natural"},
+  ru:{smile:"Естественная улыбка"}
 };
+let lang="ru";
 
-let lang = "en";
-
-/* ===============================
-   Face Analysis
-================================ */
-class SmileAnalyzer {
-  constructor() {
-    this.baseline = null;
-    this.smoothed = 0;
-    this.alpha = 0.15;
-    this.startTime = performance.now();
-    this.smileStart = null;
+/* ===== Smile Analysis ===== */
+class SmileAnalyzer{
+  constructor(){
+    this.baseline=null;
+    this.ema=0;
+    this.alpha=0.15;
+    this.t0=performance.now();
+    this.holdStart=null;
   }
-
-  update(landmarks) {
-    const p61 = landmarks[61];
-    const p291 = landmarks[291];
-    const dist = Math.hypot(p61.x - p291.x, p61.y - p291.y);
-
-    if (!this.baseline && performance.now() - this.startTime < 700) {
-      this.baseline = this.baseline ? (this.baseline + dist) / 2 : dist;
-      return { level: 0, sustained: false };
+  update(lm){
+    const a=lm[61],b=lm[291];
+    const d=Math.hypot(a.x-b.x,a.y-b.y);
+    if(!this.baseline && performance.now()-this.t0<700){
+      this.baseline=this.baseline?(this.baseline+d)/2:d;
+      return{level:0,held:false};
     }
-
-    if (!this.baseline) this.baseline = dist;
-
-    this.smoothed = this.smoothed
-      ? this.smoothed + this.alpha * (dist - this.smoothed)
-      : dist;
-
-    const ratio = this.smoothed / this.baseline;
-    const smiling = ratio >= 1.12;
-
-    if (smiling) {
-      if (!this.smileStart) this.smileStart = performance.now();
-    } else {
-      this.smileStart = null;
-    }
-
-    const sustained = this.smileStart && performance.now() - this.smileStart > 1500;
-    return {
-      level: Math.min(Math.max((ratio - 1.0) / 0.25, 0), 1),
-      sustained
+    if(!this.baseline)this.baseline=d;
+    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
+    const ratio=this.ema/this.baseline;
+    const smiling=ratio>=1.12;
+    if(smiling){
+      if(!this.holdStart)this.holdStart=performance.now();
+    }else this.holdStart=null;
+    return{
+      level:Math.min(Math.max((ratio-1)/0.25,0),1),
+      held:this.holdStart&&performance.now()-this.holdStart>1500
     };
   }
 }
 
-/* ===============================
-   Visual Rendering
-================================ */
-class Renderer {
-  constructor(canvas) {
-    this.ctx = canvas.getContext("2d");
-    this.w = canvas.width = window.innerWidth;
-    this.h = canvas.height = window.innerHeight;
-    this.intensity = 0;
+/* ===== Renderer ===== */
+class Renderer{
+  constructor(c){
+    this.ctx=c.getContext("2d");
+    this.resize();
+    window.addEventListener("resize",()=>this.resize());
+    this.aura=0;
+    this.breath=0;
   }
-
-  renderAura(faceCenter, level) {
-    this.intensity += (level - this.intensity) * 0.08;
-    if (this.intensity < 0.01) return;
-
-    const r = 120 + this.intensity * 140;
-    const g = this.ctx.createRadialGradient(
-      faceCenter.x, faceCenter.y, r * 0.3,
-      faceCenter.x, faceCenter.y, r
-    );
-    g.addColorStop(0, `rgba(200,220,255,${0.35*this.intensity})`);
-    g.addColorStop(1, "rgba(200,220,255,0)");
-
-    this.ctx.fillStyle = g;
+  resize(){
+    canvas.width=innerWidth;
+    canvas.height=innerHeight;
+  }
+  clear(){this.ctx.clearRect(0,0,canvas.width,canvas.height);}
+  drawAura(x,y,level){
+    this.aura+= (level-this.aura)*0.08;
+    if(this.aura<0.01)return;
+    this.breath+=0.02;
+    const r=140+Math.sin(this.breath)*10+this.aura*160;
+    const g=this.ctx.createRadialGradient(x,y,r*.3,x,y,r);
+    g.addColorStop(0,`rgba(180,200,255,${0.35*this.aura})`);
+    g.addColorStop(1,"rgba(180,200,255,0)");
+    this.ctx.fillStyle=g;
     this.ctx.beginPath();
-    this.ctx.arc(faceCenter.x, faceCenter.y, r, 0, Math.PI*2);
+    this.ctx.arc(x,y,r,0,Math.PI*2);
     this.ctx.fill();
   }
-
-  renderGlasses(eyes, level) {
-    if (level < 0.2) return;
-    this.ctx.strokeStyle = `rgba(220,220,230,${0.6*level})`;
-    this.ctx.lineWidth = 2;
-
+  drawGlasses(l,r,intensity){
+    if(intensity<.2)return;
+    this.ctx.strokeStyle=`rgba(230,230,240,${.6*intensity})`;
+    this.ctx.lineWidth=2;
     this.ctx.beginPath();
-    this.ctx.moveTo(eyes.left.x - 30, eyes.left.y);
-    this.ctx.lineTo(eyes.right.x + 30, eyes.right.y);
+    this.ctx.moveTo(l.x-28,l.y);
+    this.ctx.lineTo(r.x+28,r.y);
     this.ctx.stroke();
-  }
-
-  clear() {
-    this.ctx.clearRect(0,0,this.w,this.h);
   }
 }
 
-/* ===============================
-   UI / Settings
-================================ */
-const phraseEl = document.getElementById("phrase");
-const settingsToggle = document.getElementById("settingsToggle");
-const settingsPanel = document.getElementById("settingsPanel");
-const langSelect = document.getElementById("lang");
+/* ===== UI ===== */
+const phrase=document.getElementById("phrase");
+const settingsToggle=document.getElementById("settingsToggle");
+const settingsPanel=document.getElementById("settingsPanel");
+document.getElementById("lang").onchange=e=>lang=e.target.value;
+settingsToggle.onclick=()=>settingsPanel.style.display=
+  settingsPanel.style.display==="block"?"none":"block";
 
-settingsToggle.onclick = () => {
-  settingsPanel.style.display =
-    settingsPanel.style.display === "block" ? "none" : "block";
-};
+/* ===== App ===== */
+const video=document.getElementById("video");
+const canvas=document.getElementById("canvas");
+const renderer=new Renderer(canvas);
+const analyzer=new SmileAnalyzer();
 
-langSelect.onchange = e => lang = e.target.value;
-
-/* ===============================
-   App Bootstrap
-================================ */
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-
-const renderer = new Renderer(canvas);
-const analyzer = new SmileAnalyzer();
-
-const faceMesh = new FaceMesh({
-  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+const mesh=new FaceMesh({
+  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+});
+mesh.setOptions({
+  maxNumFaces:1,
+  refineLandmarks:true,
+  minDetectionConfidence:.6,
+  minTrackingConfidence:.6
 });
 
-faceMesh.setOptions({
-  maxNumFaces: 1,
-  refineLandmarks: true,
-  minDetectionConfidence: 0.6,
-  minTrackingConfidence: 0.6
-});
-
-faceMesh.onResults(res => {
+mesh.onResults(r=>{
   renderer.clear();
-
-  if (!res.multiFaceLandmarks) {
-    phraseEl.textContent = "";
+  if(!r.multiFaceLandmarks){
+    phrase.style.opacity=0;
     return;
   }
-
-  const lm = res.multiFaceLandmarks[0];
-  const smile = analyzer.update(lm);
-
-  const cx = lm[1].x * canvas.width;
-  const cy = lm[1].y * canvas.height;
-
-  renderer.renderAura({x: cx, y: cy}, smile.level);
-
-  renderer.renderGlasses({
-    left: { x: lm[33].x * canvas.width, y: lm[33].y * canvas.height },
-    right:{ x: lm[263].x * canvas.width, y: lm[263].y * canvas.height }
-  }, smile.sustained ? 1 : smile.level);
-
-  phraseEl.textContent = smile.level > 0.2 ? TEXT[lang].smile : "";
+  const lm=r.multiFaceLandmarks[0];
+  const s=analyzer.update(lm);
+  const cx=lm[1].x*canvas.width;
+  const cy=lm[1].y*canvas.height;
+  renderer.drawAura(cx,cy,s.level);
+  renderer.drawGlasses(
+    {x:lm[33].x*canvas.width,y:lm[33].y*canvas.height},
+    {x:lm[263].x*canvas.width,y:lm[263].y*canvas.height},
+    s.held?1:s.level
+  );
+  phrase.textContent=TEXT[lang].smile;
+  phrase.style.opacity=s.level>.25?1:0;
 });
 
-const camera = new Camera(video, {
-  onFrame: async () => { await faceMesh.send({image: video}); },
-  facingMode: "user"
-});
-
-camera.start();
+new Camera(video,{
+  facingMode:"user",
+  onFrame:async()=>mesh.send({image:video})
+}).start();
 </script>
 </body>
 </html>
