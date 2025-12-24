@@ -33,14 +33,24 @@ html,body{
   flex:1;
   position:relative;
   background:#000;
+  overflow:hidden;
 }
-video,canvas{
+video{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
   object-fit:cover;
+  transform:scale(0.88); /* <<< камера дальше */
 }
+canvas{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  pointer-events:none;
+}
+
 #phase{
   position:absolute;
   bottom:20px;
@@ -86,7 +96,6 @@ video,canvas{
 /* ---------- STATE ---------- */
 let phase="idle"; // idle → demo → perform → hold → rest
 let phaseTime=0;
-let faceVisible=false;
 
 /* ---------- REFERENCE ---------- */
 const refCtx=document.getElementById("refCanvas").getContext("2d");
@@ -158,41 +167,30 @@ mesh.onResults(r=>{
   octx.clearRect(0,0,overlay.width,overlay.height);
 
   if(!r.multiFaceLandmarks){
-    faceVisible=false;
     phase="idle";
+    phaseTime=0;
     idleEl.classList.remove("hidden");
     phaseEl.textContent="";
     return;
   }
 
-  faceVisible=true;
   idleEl.classList.add("hidden");
 
   const lm=r.multiFaceLandmarks[0];
   const p=smile.value(lm);
 
-  // phase machine
   phaseTime++;
 
   if(phase==="idle"){
-    phase="demo";
-    phaseTime=0;
-    demoT=0;
-    smile.reset();
+    phase="demo"; phaseTime=0; demoT=0; smile.reset();
   }else if(phase==="demo" && phaseTime>60){
-    phase="perform";
-    phaseTime=0;
+    phase="perform"; phaseTime=0;
   }else if(phase==="perform" && p>0.8){
-    phase="hold";
-    phaseTime=0;
+    phase="hold"; phaseTime=0;
   }else if(phase==="hold" && phaseTime>90){
-    phase="rest";
-    phaseTime=0;
+    phase="rest"; phaseTime=0;
   }else if(phase==="rest" && phaseTime>60){
-    phase="demo";
-    phaseTime=0;
-    demoT=0;
-    smile.reset();
+    phase="demo"; phaseTime=0; demoT=0; smile.reset();
   }
 
   phaseEl.textContent=
