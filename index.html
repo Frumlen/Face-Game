@@ -1,93 +1,307 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Smile Training</title>
+<title>Face Training – Wide Smile</title>
 
 <style>
 html,body{
   margin:0;
   padding:0;
-  background:#0b0c10;
-  overflow:hidden;
+  background:#f2f2f2;
+  height:100%;
   font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
-  color:#eee;
 }
-video,canvas{
+#app{
+  display:flex;
+  height:100%;
+}
+
+/* LEFT: reference */
+#reference{
+  flex:1;
+  background:
+    linear-gradient(#e8e8e8 1px, transparent 1px),
+    linear-gradient(90deg, #e8e8e8 1px, transparent 1px);
+  background-size:24px 24px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+}
+#reference canvas{
+  width:80%;
+  max-width:260px;
+}
+
+/* RIGHT: camera */
+#mirror{
+  flex:1;
+  position:relative;
+  background:#000;
+}
+video, #overlay{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
   object-fit:cover;
 }
-#ui{
-  position:absolute;
-  bottom:24px;
-  width:100%;
-  text-align:center;
+#overlay{
   pointer-events:none;
 }
-#text{
-  font-size:16px;
+
+/* UI */
+#topBar{
+  position:absolute;
+  top:8px;
+  left:8px;
+  right:8px;
+  display:flex;
+  justify-content:space-between;
+  color:#fff;
+  font-size:14px;
+}
+#controls{
+  position:absolute;
+  bottom:8px;
+  left:8px;
+  right:8px;
+  display:flex;
+  justify-content:space-between;
+}
+button{
+  background:#e0e0e0;
+  border:none;
+  border-radius:6px;
+  padding:6px 12px;
+  font-size:14px;
+}
+button:disabled{opacity:.4}
+#instruction{
+  position:absolute;
+  bottom:48px;
+  width:100%;
+  text-align:center;
+  color:#fff;
+  font-size:15px;
   opacity:0;
   transition:opacity .3s ease;
 }
-#langToggle{
-  position:absolute;
-  top:14px;
-  right:14px;
-  opacity:.4;
-  pointer-events:auto;
-}
+
+/* language */
 #langPanel{
   position:absolute;
-  top:48px;
-  right:14px;
-  background:rgba(20,20,24,.9);
-  border-radius:10px;
-  padding:8px;
+  top:40px;
+  right:8px;
+  background:#ffffffdd;
+  border-radius:6px;
+  padding:6px;
   display:none;
 }
 select{
-  background:#111;
-  color:#eee;
   border:none;
-  padding:6px;
-  border-radius:6px;
+  background:#f0f0f0;
 }
 </style>
 </head>
 
 <body>
 
-<video id="video" autoplay muted playsinline></video>
-<canvas id="canvas"></canvas>
+<div id="app">
 
-<div id="langToggle">🌐</div>
-<div id="langPanel">
-  <select id="lang">
-    <option value="ru">Русский</option>
-    <option value="en">English</option>
-    <option value="pt">Português</option>
-  </select>
+  <div id="reference">
+    <canvas id="refCanvas" width="300" height="300"></canvas>
+  </div>
+
+  <div id="mirror">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+
+    <div id="topBar">
+      <div id="timer">00:15</div>
+      <div id="langBtn">🌐</div>
+    </div>
+
+    <div id="instruction"></div>
+
+    <div id="controls">
+      <button id="backBtn">Back</button>
+      <button id="startBtn">Start</button>
+      <button id="pauseBtn" disabled>Pause</button>
+    </div>
+
+    <div id="langPanel">
+      <select id="lang">
+        <option value="en">English</option>
+        <option value="ru">Русский</option>
+        <option value="pt">Português</option>
+      </select>
+    </div>
+  </div>
+
 </div>
-
-<div id="ui"><div id="text"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ================= Localization ================= */
-const TEXT = {
-  ru: "Естественная улыбка",
-  en: "Natural smile",
-  pt: "Sorriso natural"
+/* ================= TEXT ================= */
+const TEXT={
+  en:"Lift your cheeks into a wide grin",
+  ru:"Поднимите щёки в широкую улыбку",
+  pt:"Levante as bochechas em um sorriso largo"
 };
-let lang="ru";
+let lang="en";
 
-/* ================= Smile Logic ================= */
+/* ================= STATE ================= */
+let running=false;
+let paused=false;
+let timeLeft=15;
+let timerId=null;
+
+/* ================= SMILE ANALYSIS ================= */
 class SmileAnalyzer{
   constructor(){
-    this.base=nu
+    this.base=null;
+    this.ema=0;
+    this.alpha=0.15;
+    this.start=performance.now();
+  }
+  reset(){
+    this.base=null;
+    this.ema=0;
+    this.start=performance.now();
+  }
+  update(lm){
+    const L=lm[61],R=lm[291];
+    const d=Math.hypot(L.x-R.x,L.y-R.y);
+
+    if(!this.base && performance.now()-this.start<700){
+      this.base=this.base?(this.base+d)/2:d;
+      return 0;
+    }
+    if(!this.base)this.base=d;
+
+    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
+    const ratio=this.ema/this.base;
+    return Math.min(Math.max((ratio-1)/0.25,0),1);
+  }
+}
+const smile=new SmileAnalyzer();
+
+/* ================= REFERENCE DRAW ================= */
+const refCtx=document.getElementById("refCanvas").getContext("2d");
+function drawReference(){
+  refCtx.clearRect(0,0,300,300);
+  refCtx.strokeStyle="#444";
+  refCtx.lineWidth=2;
+  refCtx.beginPath();
+  refCtx.arc(150,150,90,0,Math.PI*2);
+  refCtx.stroke();
+
+  refCtx.strokeStyle="#c44";
+  refCtx.beginPath();
+  refCtx.arc(150,170,50,0,Math.PI);
+  refCtx.stroke();
+}
+drawReference();
+
+/* ================= OVERLAY ================= */
+const overlay=document.getElementById("overlay");
+const octx=overlay.getContext("2d");
+function resize(){
+  overlay.width=overlay.clientWidth;
+  overlay.height=overlay.clientHeight;
+}
+window.addEventListener("resize",resize);
+resize();
+
+function drawSmileGuide(lm,p){
+  if(!running)return;
+  const L=lm[61],R=lm[291];
+  const x1=L.x*overlay.width;
+  const x2=R.x*overlay.width;
+  const y=(L.y+R.y)/2*overlay.height;
+
+  octx.strokeStyle=`rgba(255,255,255,${0.2+0.6*p})`;
+  octx.lineWidth=3;
+  octx.beginPath();
+  octx.arc((x1+x2)/2,y,(x2-x1)/2,0,Math.PI);
+  octx.stroke();
+}
+
+/* ================= TIMER ================= */
+function startTimer(){
+  timeLeft=15;
+  document.getElementById("timer").textContent="00:15";
+  timerId=setInterval(()=>{
+    if(paused)return;
+    timeLeft--;
+    document.getElementById("timer").textContent=
+      "00:"+String(timeLeft).padStart(2,"0");
+    if(timeLeft<=0) stopExercise();
+  },1000);
+}
+function stopExercise(){
+  running=false;
+  paused=false;
+  clearInterval(timerId);
+  document.getElementById("startBtn").disabled=false;
+  document.getElementById("pauseBtn").disabled=true;
+  document.getElementById("instruction").style.opacity=0;
+}
+
+/* ================= UI ================= */
+document.getElementById("startBtn").onclick=()=>{
+  smile.reset();
+  running=true;
+  paused=false;
+  startTimer();
+  document.getElementById("startBtn").disabled=true;
+  document.getElementById("pauseBtn").disabled=false;
+  document.getElementById("instruction").textContent=TEXT[lang];
+  document.getElementById("instruction").style.opacity=1;
+};
+document.getElementById("pauseBtn").onclick=()=>{
+  paused=!paused;
+};
+document.getElementById("backBtn").onclick=()=>{
+  stopExercise();
+};
+
+document.getElementById("langBtn").onclick=()=>{
+  const p=document.getElementById("langPanel");
+  p.style.display=p.style.display==="block"?"none":"block";
+};
+document.getElementById("lang").onchange=e=>{
+  lang=e.target.value;
+};
+
+/* ================= FACE MESH ================= */
+const video=document.getElementById("video");
+const mesh=new FaceMesh({
+  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+});
+mesh.setOptions({
+  maxNumFaces:1,
+  refineLandmarks:true,
+  minDetectionConfidence:.6,
+  minTrackingConfidence:.6
+});
+mesh.onResults(r=>{
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  if(!running||paused||!r.multiFaceLandmarks)return;
+  const lm=r.multiFaceLandmarks[0];
+  const p=smile.update(lm);
+  drawSmileGuide(lm,p);
+});
+new Camera(video,{
+  facingMode:"user",
+  onFrame:async()=>mesh.send({image:video})
+}).start();
+</script>
+
+</body>
+</html>
