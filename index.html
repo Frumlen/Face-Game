@@ -1,36 +1,40 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-<meta charset="UTF-8" />
+<meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-<title>Voice Presence</title>
+<title>Smile Lens – Debug Visual</title>
 
 <style>
-html, body {
-  margin: 0;
-  padding: 0;
-  background: #0b0c10;
-  overflow: hidden;
-  font-family: system-ui, sans-serif;
+html,body{
+  margin:0;
+  padding:0;
+  background:#05060a;
+  overflow:hidden;
+  font-family:system-ui,sans-serif;
 }
-
-video, canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+video,canvas{
+  position:absolute;
+  top:0;left:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
 }
-
-#hint {
-  position: absolute;
-  bottom: 24px;
-  width: 100%;
-  text-align: center;
-  color: rgba(220,220,230,0.8);
-  font-size: 14px;
-  pointer-events: none;
-  transition: opacity 0.4s ease;
+#bar{
+  position:absolute;
+  bottom:0;
+  left:0;
+  height:10px;
+  width:0%;
+  background:#3a6cff;
+  transition:background .2s linear;
+}
+#state{
+  position:absolute;
+  top:16px;
+  left:16px;
+  font-size:14px;
+  opacity:.7;
 }
 </style>
 </head>
@@ -39,99 +43,119 @@ video, canvas {
 
 <video id="video" autoplay muted playsinline></video>
 <canvas id="canvas"></canvas>
-<div id="hint"></div>
+<div id="bar"></div>
+<div id="state"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ===============================
-   Camera
-================================ */
-const video = document.getElementById("video");
-navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true })
-  .then(stream => video.srcObject = stream);
+/* ===== Smile Logic ===== */
+class Smile {
+  constructor(){
+    this.base=null;
+    this.ema=0;
+    this.alpha=0.2;
+    this.t0=performance.now();
+    this.hold=null;
+  }
+  update(lm){
+    const a=lm[61],b=lm[291];
+    const d=Math.hypot(a.x-b.x,a.y-b.y);
 
-/* ===============================
-   Audio Analysis (Voice Presence)
-================================ */
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-let analyser, data;
+    if(!this.base && performance.now()-this.t0<700){
+      this.base=this.base?(this.base+d)/2:d;
+      return {v:0,held:false};
+    }
+    if(!this.base)this.base=d;
 
-navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-  const src = audioCtx.createMediaStreamSource(stream);
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  data = new Uint8Array(analyser.frequencyBinCount);
-  src.connect(analyser);
+    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
+    const ratio=this.ema/this.base;
+    const active=ratio>=1.12;
+
+    if(active){
+      if(!this.hold)this.hold=performance.now();
+    } else this.hold=null;
+
+    return {
+      v:Math.min(Math.max((ratio-1)/0.3,0),1),
+      held:this.hold && performance.now()-this.hold>1500
+    };
+  }
+}
+
+/* ===== Visual ===== */
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+const bar=document.getElementById("bar");
+const state=document.getElementById("state");
+
+function resize(){
+  canvas.width=innerWidth;
+  canvas.height=innerHeight;
+}
+resize();
+addEventListener("resize",resize);
+
+function flash(x,y,str){
+  ctx.fillStyle=`rgba(255,255,255,${0.25*str})`;
+  ctx.beginPath();
+  ctx.arc(x,y,80+str*120,0,Math.PI*2);
+  ctx.fill();
+}
+
+/* ===== App ===== */
+const smile=new Smile();
+let lastHeld=false;
+
+const mesh=new FaceMesh({
+  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+});
+mesh.setOptions({
+  maxNumFaces:1,
+  refineLandmarks:true,
+  minDetectionConfidence:.6,
+  minTrackingConfidence:.6
 });
 
-/* ===============================
-   Presence Model (heuristic, local)
-   – не громкость, а стабильность
-================================ */
-let presence = 0;
-function updatePresence() {
-  if (!analyser) return presence;
-
-  analyser.getByteFrequencyData(data);
-
-  let sum = 0, variance = 0;
-  for (let i = 4; i < 64; i++) sum += data[i];
-  const mean = sum / 60;
-
-  for (let i = 4; i < 64; i++)
-    variance += (data[i] - mean) ** 2;
-
-  const stability = 1 / (1 + variance * 0.002);
-  presence += (stability - presence) * 0.08;
-  return presence;
-}
-
-/* ===============================
-   Rendering
-================================ */
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-
-function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener("resize", resize);
-resize();
-
-function render() {
+mesh.onResults(r=>{
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  const p = updatePresence();
-  if (p > 0.02) {
-    const r = 160 + p * 180;
-    const g = ctx.createRadialGradient(
-      canvas.width/2, canvas.height/2, r*0.3,
-      canvas.width/2, canvas.height/2, r
-    );
-    g.addColorStop(0, `rgba(180,200,255,${0.35*p})`);
-    g.addColorStop(1, "rgba(180,200,255,0)");
-
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(canvas.width/2, canvas.height/2, r, 0, Math.PI*2);
-    ctx.fill();
+  if(!r.multiFaceLandmarks){
+    bar.style.width="0%";
+    state.textContent="no face";
+    return;
   }
 
-  requestAnimationFrame(render);
-}
-render();
+  const lm=r.multiFaceLandmarks[0];
+  const s=smile.update(lm);
 
-/* ===============================
-   Minimal UX
-================================ */
-const hint = document.getElementById("hint");
-let spoke = false;
+  const cx=lm[1].x*canvas.width;
+  const cy=lm[1].y*canvas.height;
 
-setInterval(() => {
-  if (presence > 0.05) spoke = true;
-  hint.textContent = spoke ? "" : "speak";
-  hint.style.opacity = spoke ? 0 : 0.6;
-}, 300);
+  bar.style.width=`${s.v*100}%`;
+
+  if(!s.v){
+    bar.style.background="#3a6cff";
+    state.textContent="idle";
+  } else if(s.v && !s.held){
+    bar.style.background="#ffb347";
+    state.textContent="smile";
+    flash(cx,cy,s.v);
+  } else {
+    bar.style.background="#fff1c1";
+    state.textContent="smile held";
+    flash(cx,cy,1);
+  }
+
+  lastHeld=s.held;
+});
+
+const video=document.getElementById("video");
+new Camera(video,{
+  facingMode:"user",
+  onFrame:async()=>mesh.send({image:video})
+}).start();
 </script>
 
 </body>
