@@ -3,39 +3,54 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Face State Game</title>
+<title>Smile Lens</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <style>
-body {
-  margin: 0;
+html, body {
+  margin: 0; padding: 0;
+  background: #000; color: #fff;
   font-family: system-ui, sans-serif;
-  background: #000;
-  color: #fff;
-  text-align: center;
+  overflow: hidden;
 }
 video, canvas {
   position: absolute;
-  top: 0; left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-#ui {
+#hud {
   position: fixed;
   bottom: 20px;
   width: 100%;
+  text-align: center;
+  pointer-events: none;
 }
-button, select {
-  font-size: 16px;
-  padding: 10px 14px;
-  margin: 4px;
-}
-#state {
+#label {
   font-size: 20px;
-  margin-bottom: 8px;
+  opacity: 0.9;
+}
+#gear {
+  position: fixed;
+  top: 16px; right: 16px;
+  font-size: 22px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+#settings {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: none;
+  padding: 20px;
+}
+select {
+  font-size: 16px;
+  margin: 8px 0;
+  width: 100%;
 }
 </style>
 </head>
@@ -45,78 +60,57 @@ button, select {
 <video id="video" autoplay muted playsinline></video>
 <canvas id="canvas"></canvas>
 
-<div id="ui">
-  <div id="state">—</div>
-  <button id="beforeBtn">Before</button>
-  <button id="afterBtn">After</button>
+<div id="gear">⚙️</div>
+
+<div id="hud">
+  <div id="label"></div>
+</div>
+
+<div id="settings">
+  <h3>Settings</h3>
+  <label>Language</label>
   <select id="lang">
-    <option value="en">EN</option>
-    <option value="pt">PT-BR</option>
-    <option value="ru">RU</option>
+    <option value="en">English</option>
+    <option value="pt">Português (BR)</option>
+    <option value="ru">Русский</option>
+  </select>
+
+  <label>Lens</label>
+  <select id="mask">
+    <option value="aura">Aura</option>
+    <option value="glasses">Smart Glasses</option>
   </select>
 </div>
 
 <script>
 /* ---------- i18n ---------- */
-const T = {
-  en: {
-    before: "Before",
-    after: "After",
-    relaxed: "Relaxed",
-    tense: "Tense"
-  },
-  pt: {
-    before: "Antes",
-    after: "Depois",
-    relaxed: "Relaxado",
-    tense: "Tenso"
-  },
-  ru: {
-    before: "До",
-    after: "После",
-    relaxed: "Расслаблено",
-    tense: "Напряжено"
-  }
+const TEXT = {
+  en: { smile: "Natural smile" },
+  pt: { smile: "Sorriso natural" },
+  ru: { smile: "Естественная улыбка" }
 };
-
 let LANG = "en";
-const $ = id => document.getElementById(id);
+let MASK = "aura";
 
-/* ---------- Face Mesh ---------- */
-const video = $("video");
-const canvas = $("canvas");
+/* ---------- DOM ---------- */
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const label = document.getElementById("label");
 
-let baseline = null;
-let lastState = "—";
+/* ---------- State ---------- */
+let neutralWidth = null;
+let smileLevel = 0;
+let smileHold = 0;
 
-function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+/* ---------- Utils ---------- */
+const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 
-function analyze(face) {
-  const brow = dist(face[70], face[300]);
-  const eye = (dist(face[159], face[145]) + dist(face[386], face[374])) / 2;
-  const lips = dist(face[13], face[14]);
-  return { brow, eye, lips };
-}
-
-function classify(cur, base) {
-  let score = 0;
-  if (cur.brow < base.brow * 0.9) score++;
-  if (cur.eye < base.eye * 0.85) score++;
-  if (cur.lips < base.lips * 0.85) score++;
-  return score >= 2 ? "tense" : "relaxed";
-}
-
+/* ---------- FaceMesh ---------- */
 const faceMesh = new FaceMesh({
   locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
 });
-
-faceMesh.setOptions({
-  maxNumFaces: 1,
-  refineLandmarks: true
-});
+faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true });
 
 faceMesh.onResults(res => {
   canvas.width = video.videoWidth;
@@ -124,51 +118,67 @@ faceMesh.onResults(res => {
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   if (!res.multiFaceLandmarks) return;
+  const f = res.multiFaceLandmarks[0];
 
-  const face = res.multiFaceLandmarks[0];
-  const cur = analyze(face);
+  const mouthWidth = dist(f[61], f[291]);
+  if (!neutralWidth) neutralWidth = mouthWidth;
 
-  if (baseline) {
-    lastState = classify(cur, baseline);
-    ctx.fillStyle = lastState === "tense"
-      ? "rgba(255,0,0,0.25)"
-      : "rgba(0,255,0,0.25)";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-    $("state").innerText = T[LANG][lastState];
-  }
+  const ratio = mouthWidth / neutralWidth;
+  const target = ratio > 1.12 ? 1 : 0;
+
+  smileLevel += (target - smileLevel) * 0.15;
+  smileHold = smileLevel > 0.8 ? smileHold + 1 : 0;
+
+  drawEffect(f, smileLevel, smileHold);
+  label.innerText = smileLevel > 0.6 ? TEXT[LANG].smile : "";
 });
 
-const camera = new Camera(video, {
-  facingMode: "user",
-  onFrame: async () => {
-    await faceMesh.send({ image: video });
+/* ---------- Effects ---------- */
+function drawEffect(face, power, hold) {
+  ctx.save();
+  ctx.globalAlpha = power;
+
+  if (MASK === "aura") {
+    const c = face[1];
+    const r = canvas.width * 0.25 + Math.sin(Date.now()/600)*20;
+    const g = ctx.createRadialGradient(
+      c.x*canvas.width, c.y*canvas.height, r*0.3,
+      c.x*canvas.width, c.y*canvas.height, r
+    );
+    g.addColorStop(0, "rgba(255,255,200,0.8)");
+    g.addColorStop(1, "rgba(0,255,180,0.0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(c.x*canvas.width, c.y*canvas.height, r, 0, Math.PI*2);
+    ctx.fill();
   }
-});
-camera.start();
 
-/* ---------- UI ---------- */
-$("beforeBtn").onclick = () => {
-  baseline = null;
-  setTimeout(() => baseline = lastMetrics, 300);
-};
+  if (MASK === "glasses") {
+    ctx.strokeStyle = `rgba(0,200,255,${0.5+power})`;
+    ctx.lineWidth = 4;
+    const l = face[33], r = face[263];
+    ctx.beginPath();
+    ctx.rect(l.x*canvas.width-40, l.y*canvas.height-20, 80, 40);
+    ctx.rect(r.x*canvas.width-40, r.y*canvas.height-20, 80, 40);
+    ctx.stroke();
+  }
 
-let lastMetrics = null;
-faceMesh.onResults = (function(orig){
-  return function(res){
-    if (res.multiFaceLandmarks) {
-      lastMetrics = analyze(res.multiFaceLandmarks[0]);
-    }
-    orig(res);
-  };
-})(faceMesh.onResults);
+  ctx.restore();
+}
 
-$("afterBtn").onclick = () => {};
+/* ---------- Camera ---------- */
+new Camera(video, {
+  facingMode:"user",
+  onFrame: async()=>faceMesh.send({image:video})
+}).start();
 
-$("lang").onchange = e => {
-  LANG = e.target.value;
-  $("beforeBtn").innerText = T[LANG].before;
-  $("afterBtn").innerText = T[LANG].after;
-};
+/* ---------- Settings ---------- */
+const settings = document.getElementById("settings");
+document.getElementById("gear").onclick = () =>
+  settings.style.display = settings.style.display ? "" : "block";
+
+document.getElementById("lang").onchange = e => LANG = e.target.value;
+document.getElementById("mask").onchange = e => MASK = e.target.value;
 </script>
 
 </body>
