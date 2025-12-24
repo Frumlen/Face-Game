@@ -1,56 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
 <title>Smile Lens</title>
-
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <style>
 html, body {
-  margin: 0; padding: 0;
-  background: #000; color: #fff;
-  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: #0b0c10;
   overflow: hidden;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #eaeaea;
 }
+
 video, canvas {
   position: absolute;
-  inset: 0;
+  top: 0; left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-#hud {
-  position: fixed;
-  bottom: 20px;
+
+#ui {
+  position: absolute;
+  bottom: 24px;
   width: 100%;
   text-align: center;
   pointer-events: none;
+  opacity: 0.8;
+  transition: opacity 0.4s ease;
 }
-#label {
-  font-size: 20px;
-  opacity: 0.9;
-}
-#gear {
-  position: fixed;
-  top: 16px; right: 16px;
-  font-size: 22px;
-  pointer-events: auto;
-  cursor: pointer;
-}
-#settings {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.85);
-  display: none;
-  padding: 20px;
-}
-select {
+
+#phrase {
   font-size: 16px;
-  margin: 8px 0;
-  width: 100%;
+  letter-spacing: 0.3px;
+}
+
+#settingsToggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  pointer-events: auto;
+  opacity: 0.4;
+}
+
+#settingsPanel {
+  position: absolute;
+  top: 56px;
+  right: 16px;
+  background: rgba(20,20,24,0.85);
+  border-radius: 12px;
+  padding: 12px;
+  display: none;
+  pointer-events: auto;
+}
+
+select {
+  background: #111;
+  color: #eee;
+  border: none;
+  padding: 6px;
+  border-radius: 6px;
 }
 </style>
 </head>
@@ -60,126 +72,190 @@ select {
 <video id="video" autoplay muted playsinline></video>
 <canvas id="canvas"></canvas>
 
-<div id="gear">⚙️</div>
+<div id="settingsToggle">⚙︎</div>
 
-<div id="hud">
-  <div id="label"></div>
-</div>
-
-<div id="settings">
-  <h3>Settings</h3>
-  <label>Language</label>
+<div id="settingsPanel">
   <select id="lang">
     <option value="en">English</option>
-    <option value="pt">Português (BR)</option>
+    <option value="pt">Português</option>
     <option value="ru">Русский</option>
-  </select>
-
-  <label>Lens</label>
-  <select id="mask">
-    <option value="aura">Aura</option>
-    <option value="glasses">Smart Glasses</option>
   </select>
 </div>
 
-<script>
-/* ---------- i18n ---------- */
-const TEXT = {
-  en: { smile: "Natural smile" },
-  pt: { smile: "Sorriso natural" },
-  ru: { smile: "Естественная улыбка" }
-};
-let LANG = "en";
-let MASK = "aura";
+<div id="ui">
+  <div id="phrase"></div>
+</div>
 
-/* ---------- DOM ---------- */
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+/* ===============================
+   Localization
+================================ */
+const TEXT = {
+  en: { calm: "", smile: "Natural smile" },
+  pt: { calm: "", smile: "Sorriso natural" },
+  ru: { calm: "", smile: "Естественная улыбка" }
+};
+
+let lang = "en";
+
+/* ===============================
+   Face Analysis
+================================ */
+class SmileAnalyzer {
+  constructor() {
+    this.baseline = null;
+    this.smoothed = 0;
+    this.alpha = 0.15;
+    this.startTime = performance.now();
+    this.smileStart = null;
+  }
+
+  update(landmarks) {
+    const p61 = landmarks[61];
+    const p291 = landmarks[291];
+    const dist = Math.hypot(p61.x - p291.x, p61.y - p291.y);
+
+    if (!this.baseline && performance.now() - this.startTime < 700) {
+      this.baseline = this.baseline ? (this.baseline + dist) / 2 : dist;
+      return { level: 0, sustained: false };
+    }
+
+    if (!this.baseline) this.baseline = dist;
+
+    this.smoothed = this.smoothed
+      ? this.smoothed + this.alpha * (dist - this.smoothed)
+      : dist;
+
+    const ratio = this.smoothed / this.baseline;
+    const smiling = ratio >= 1.12;
+
+    if (smiling) {
+      if (!this.smileStart) this.smileStart = performance.now();
+    } else {
+      this.smileStart = null;
+    }
+
+    const sustained = this.smileStart && performance.now() - this.smileStart > 1500;
+    return {
+      level: Math.min(Math.max((ratio - 1.0) / 0.25, 0), 1),
+      sustained
+    };
+  }
+}
+
+/* ===============================
+   Visual Rendering
+================================ */
+class Renderer {
+  constructor(canvas) {
+    this.ctx = canvas.getContext("2d");
+    this.w = canvas.width = window.innerWidth;
+    this.h = canvas.height = window.innerHeight;
+    this.intensity = 0;
+  }
+
+  renderAura(faceCenter, level) {
+    this.intensity += (level - this.intensity) * 0.08;
+    if (this.intensity < 0.01) return;
+
+    const r = 120 + this.intensity * 140;
+    const g = this.ctx.createRadialGradient(
+      faceCenter.x, faceCenter.y, r * 0.3,
+      faceCenter.x, faceCenter.y, r
+    );
+    g.addColorStop(0, `rgba(200,220,255,${0.35*this.intensity})`);
+    g.addColorStop(1, "rgba(200,220,255,0)");
+
+    this.ctx.fillStyle = g;
+    this.ctx.beginPath();
+    this.ctx.arc(faceCenter.x, faceCenter.y, r, 0, Math.PI*2);
+    this.ctx.fill();
+  }
+
+  renderGlasses(eyes, level) {
+    if (level < 0.2) return;
+    this.ctx.strokeStyle = `rgba(220,220,230,${0.6*level})`;
+    this.ctx.lineWidth = 2;
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(eyes.left.x - 30, eyes.left.y);
+    this.ctx.lineTo(eyes.right.x + 30, eyes.right.y);
+    this.ctx.stroke();
+  }
+
+  clear() {
+    this.ctx.clearRect(0,0,this.w,this.h);
+  }
+}
+
+/* ===============================
+   UI / Settings
+================================ */
+const phraseEl = document.getElementById("phrase");
+const settingsToggle = document.getElementById("settingsToggle");
+const settingsPanel = document.getElementById("settingsPanel");
+const langSelect = document.getElementById("lang");
+
+settingsToggle.onclick = () => {
+  settingsPanel.style.display =
+    settingsPanel.style.display === "block" ? "none" : "block";
+};
+
+langSelect.onchange = e => lang = e.target.value;
+
+/* ===============================
+   App Bootstrap
+================================ */
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const label = document.getElementById("label");
 
-/* ---------- State ---------- */
-let neutralWidth = null;
-let smileLevel = 0;
-let smileHold = 0;
+const renderer = new Renderer(canvas);
+const analyzer = new SmileAnalyzer();
 
-/* ---------- Utils ---------- */
-const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-
-/* ---------- FaceMesh ---------- */
 const faceMesh = new FaceMesh({
   locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
 });
-faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true });
 
-faceMesh.onResults(res => {
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  if (!res.multiFaceLandmarks) return;
-  const f = res.multiFaceLandmarks[0];
-
-  const mouthWidth = dist(f[61], f[291]);
-  if (!neutralWidth) neutralWidth = mouthWidth;
-
-  const ratio = mouthWidth / neutralWidth;
-  const target = ratio > 1.12 ? 1 : 0;
-
-  smileLevel += (target - smileLevel) * 0.15;
-  smileHold = smileLevel > 0.8 ? smileHold + 1 : 0;
-
-  drawEffect(f, smileLevel, smileHold);
-  label.innerText = smileLevel > 0.6 ? TEXT[LANG].smile : "";
+faceMesh.setOptions({
+  maxNumFaces: 1,
+  refineLandmarks: true,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6
 });
 
-/* ---------- Effects ---------- */
-function drawEffect(face, power, hold) {
-  ctx.save();
-  ctx.globalAlpha = power;
+faceMesh.onResults(res => {
+  renderer.clear();
 
-  if (MASK === "aura") {
-    const c = face[1];
-    const r = canvas.width * 0.25 + Math.sin(Date.now()/600)*20;
-    const g = ctx.createRadialGradient(
-      c.x*canvas.width, c.y*canvas.height, r*0.3,
-      c.x*canvas.width, c.y*canvas.height, r
-    );
-    g.addColorStop(0, "rgba(255,255,200,0.8)");
-    g.addColorStop(1, "rgba(0,255,180,0.0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(c.x*canvas.width, c.y*canvas.height, r, 0, Math.PI*2);
-    ctx.fill();
+  if (!res.multiFaceLandmarks) {
+    phraseEl.textContent = "";
+    return;
   }
 
-  if (MASK === "glasses") {
-    ctx.strokeStyle = `rgba(0,200,255,${0.5+power})`;
-    ctx.lineWidth = 4;
-    const l = face[33], r = face[263];
-    ctx.beginPath();
-    ctx.rect(l.x*canvas.width-40, l.y*canvas.height-20, 80, 40);
-    ctx.rect(r.x*canvas.width-40, r.y*canvas.height-20, 80, 40);
-    ctx.stroke();
-  }
+  const lm = res.multiFaceLandmarks[0];
+  const smile = analyzer.update(lm);
 
-  ctx.restore();
-}
+  const cx = lm[1].x * canvas.width;
+  const cy = lm[1].y * canvas.height;
 
-/* ---------- Camera ---------- */
-new Camera(video, {
-  facingMode:"user",
-  onFrame: async()=>faceMesh.send({image:video})
-}).start();
+  renderer.renderAura({x: cx, y: cy}, smile.level);
 
-/* ---------- Settings ---------- */
-const settings = document.getElementById("settings");
-document.getElementById("gear").onclick = () =>
-  settings.style.display = settings.style.display ? "" : "block";
+  renderer.renderGlasses({
+    left: { x: lm[33].x * canvas.width, y: lm[33].y * canvas.height },
+    right:{ x: lm[263].x * canvas.width, y: lm[263].y * canvas.height }
+  }, smile.sustained ? 1 : smile.level);
 
-document.getElementById("lang").onchange = e => LANG = e.target.value;
-document.getElementById("mask").onchange = e => MASK = e.target.value;
+  phraseEl.textContent = smile.level > 0.2 ? TEXT[lang].smile : "";
+});
+
+const camera = new Camera(video, {
+  onFrame: async () => { await faceMesh.send({image: video}); },
+  facingMode: "user"
+});
+
+camera.start();
 </script>
-
 </body>
 </html>
