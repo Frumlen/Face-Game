@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-<title>Smile Lens – Debug Visual</title>
+<title>Smile Lens</title>
 
 <style>
 html,body{
@@ -11,30 +11,13 @@ html,body{
   padding:0;
   background:#05060a;
   overflow:hidden;
-  font-family:system-ui,sans-serif;
 }
 video,canvas{
   position:absolute;
-  top:0;left:0;
+  inset:0;
   width:100%;
   height:100%;
   object-fit:cover;
-}
-#bar{
-  position:absolute;
-  bottom:0;
-  left:0;
-  height:10px;
-  width:0%;
-  background:#3a6cff;
-  transition:background .2s linear;
-}
-#state{
-  position:absolute;
-  top:16px;
-  left:16px;
-  font-size:14px;
-  opacity:.7;
 }
 </style>
 </head>
@@ -43,21 +26,19 @@ video,canvas{
 
 <video id="video" autoplay muted playsinline></video>
 <canvas id="canvas"></canvas>
-<div id="bar"></div>
-<div id="state"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ===== Smile Logic ===== */
-class Smile {
+/* ================= Smile Logic ================= */
+class SmileAnalyzer{
   constructor(){
     this.base=null;
     this.ema=0;
-    this.alpha=0.2;
+    this.alpha=0.18;
     this.t0=performance.now();
-    this.hold=null;
+    this.hold=0;
   }
   update(lm){
     const a=lm[61],b=lm[291];
@@ -65,31 +46,25 @@ class Smile {
 
     if(!this.base && performance.now()-this.t0<700){
       this.base=this.base?(this.base+d)/2:d;
-      return {v:0,held:false};
+      return 0;
     }
     if(!this.base)this.base=d;
 
     this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
     const ratio=this.ema/this.base;
-    const active=ratio>=1.12;
 
-    if(active){
-      if(!this.hold)this.hold=performance.now();
-    } else this.hold=null;
-
-    return {
-      v:Math.min(Math.max((ratio-1)/0.3,0),1),
-      held:this.hold && performance.now()-this.hold>1500
-    };
+    if(ratio>1.12){
+      this.hold=Math.min(this.hold+0.015,1);
+    }else{
+      this.hold=Math.max(this.hold-0.03,0);
+    }
+    return this.hold;
   }
 }
 
-/* ===== Visual ===== */
+/* ================= Renderer ================= */
 const canvas=document.getElementById("canvas");
 const ctx=canvas.getContext("2d");
-const bar=document.getElementById("bar");
-const state=document.getElementById("state");
-
 function resize(){
   canvas.width=innerWidth;
   canvas.height=innerHeight;
@@ -97,16 +72,60 @@ function resize(){
 resize();
 addEventListener("resize",resize);
 
-function flash(x,y,str){
-  ctx.fillStyle=`rgba(255,255,255,${0.25*str})`;
+let energyPhase=0;
+let burst=0;
+
+function drawInnerLight(x,y,p){
+  if(p<0.05)return;
+  const r=100+200*p;
+  const g=ctx.createRadialGradient(x,y,r*0.2,x,y,r);
+  g.addColorStop(0,`rgba(255,255,255,${0.25*p})`);
+  g.addColorStop(0.5,`rgba(180,210,255,${0.18*p})`);
+  g.addColorStop(1,"rgba(180,210,255,0)");
+  ctx.fillStyle=g;
   ctx.beginPath();
-  ctx.arc(x,y,80+str*120,0,Math.PI*2);
+  ctx.arc(x,y,r,0,Math.PI*2);
   ctx.fill();
 }
 
-/* ===== App ===== */
-const smile=new Smile();
-let lastHeld=false;
+function drawEnergyArcs(x,y,p){
+  if(p<0.2)return;
+  energyPhase+=0.05;
+  ctx.strokeStyle=`rgba(200,220,255,${0.4*p})`;
+  ctx.lineWidth=2;
+  for(let i=0;i<3;i++){
+    const a=energyPhase+i*2;
+    const r=180+Math.sin(a*1.3)*20;
+    ctx.beginPath();
+    ctx.arc(x,y,r,a,a+Math.PI*0.6);
+    ctx.stroke();
+  }
+}
+
+function drawSmileRing(x,y,p){
+  if(p<=0)return;
+  ctx.strokeStyle=`rgba(255,255,255,${0.7*p})`;
+  ctx.lineWidth=4;
+  ctx.beginPath();
+  ctx.arc(
+    x,y,240,
+    -Math.PI/2,
+    -Math.PI/2 + Math.PI*2*p
+  );
+  ctx.stroke();
+}
+
+function drawCompletion(x,y){
+  burst+=0.05;
+  const r=300*burst;
+  ctx.fillStyle=`rgba(255,255,255,${0.3*(1-burst)})`;
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fill();
+}
+
+/* ================= App ================= */
+const smile=new SmileAnalyzer();
 
 const mesh=new FaceMesh({
   locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
@@ -122,33 +141,26 @@ mesh.onResults(r=>{
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   if(!r.multiFaceLandmarks){
-    bar.style.width="0%";
-    state.textContent="no face";
+    smile.hold=0;
     return;
   }
 
   const lm=r.multiFaceLandmarks[0];
-  const s=smile.update(lm);
+  const p=smile.update(lm);
 
   const cx=lm[1].x*canvas.width;
   const cy=lm[1].y*canvas.height;
 
-  bar.style.width=`${s.v*100}%`;
+  drawInnerLight(cx,cy,p);
+  drawEnergyArcs(cx,cy,p);
+  drawSmileRing(cx,cy,p);
 
-  if(!s.v){
-    bar.style.background="#3a6cff";
-    state.textContent="idle";
-  } else if(s.v && !s.held){
-    bar.style.background="#ffb347";
-    state.textContent="smile";
-    flash(cx,cy,s.v);
-  } else {
-    bar.style.background="#fff1c1";
-    state.textContent="smile held";
-    flash(cx,cy,1);
+  if(p>=1){
+    drawCompletion(cx,cy);
+    if(burst>1) burst=0;
+  }else{
+    burst=0;
   }
-
-  lastHeld=s.held;
 });
 
 const video=document.getElementById("video");
