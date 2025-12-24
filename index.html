@@ -1,145 +1,131 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Face Training – Wide Smile</title>
 
 <style>
 html,body{
   margin:0;
   padding:0;
-  background:#f2f2f2;
   height:100%;
   font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+  background:#eaeaea;
 }
-#app{
-  display:flex;
-  height:100%;
+.hidden{display:none}
+button{
+  padding:8px 14px;
+  font-size:14px;
+  border:none;
+  border-radius:6px;
 }
+#app{height:100%}
 
-/* LEFT: reference */
-#reference{
-  flex:1;
-  background:
-    linear-gradient(#e8e8e8 1px, transparent 1px),
-    linear-gradient(90deg, #e8e8e8 1px, transparent 1px);
-  background-size:24px 24px;
+/* MENU */
+#menu{
+  height:100%;
   display:flex;
-  flex-direction:column;
   align-items:center;
   justify-content:center;
 }
-#reference canvas{
-  width:80%;
-  max-width:260px;
-}
+#menu button{font-size:18px}
 
-/* RIGHT: camera */
+/* EXERCISE */
+#exercise{
+  height:100%;
+  display:flex;
+}
+#ref{
+  flex:1;
+  background:
+    linear-gradient(#ddd 1px,transparent 1px),
+    linear-gradient(90deg,#ddd 1px,transparent 1px);
+  background-size:24px 24px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
 #mirror{
   flex:1;
   position:relative;
   background:#000;
 }
-video, #overlay{
+video,canvas{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
   object-fit:cover;
 }
-#overlay{
-  pointer-events:none;
-}
-
-/* UI */
-#topBar{
+#top{
   position:absolute;
-  top:8px;
-  left:8px;
-  right:8px;
+  top:8px;left:8px;right:8px;
   display:flex;
   justify-content:space-between;
   color:#fff;
-  font-size:14px;
 }
-#controls{
+#bottom{
   position:absolute;
-  bottom:8px;
-  left:8px;
-  right:8px;
+  bottom:8px;left:8px;right:8px;
   display:flex;
   justify-content:space-between;
 }
-button{
-  background:#e0e0e0;
-  border:none;
-  border-radius:6px;
-  padding:6px 12px;
-  font-size:14px;
-}
-button:disabled{opacity:.4}
-#instruction{
+#phase{
   position:absolute;
   bottom:48px;
   width:100%;
   text-align:center;
   color:#fff;
   font-size:15px;
-  opacity:0;
-  transition:opacity .3s ease;
 }
 
-/* language */
-#langPanel{
-  position:absolute;
-  top:40px;
-  right:8px;
-  background:#ffffffdd;
-  border-radius:6px;
-  padding:6px;
-  display:none;
-}
-select{
-  border:none;
-  background:#f0f0f0;
+/* END */
+#end{
+  height:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:16px;
 }
 </style>
 </head>
 
 <body>
-
 <div id="app">
 
-  <div id="reference">
+<!-- MENU -->
+<div id="menu">
+  <button id="startBtn">Wide Smile</button>
+</div>
+
+<!-- EXERCISE -->
+<div id="exercise" class="hidden">
+  <div id="ref">
     <canvas id="refCanvas" width="300" height="300"></canvas>
   </div>
-
   <div id="mirror">
     <video id="video" autoplay muted playsinline></video>
     <canvas id="overlay"></canvas>
 
-    <div id="topBar">
-      <div id="timer">00:15</div>
-      <div id="langBtn">🌐</div>
-    </div>
-
-    <div id="instruction"></div>
-
-    <div id="controls">
+    <div id="top">
+      <div id="timer">15</div>
       <button id="backBtn">Back</button>
-      <button id="startBtn">Start</button>
-      <button id="pauseBtn" disabled>Pause</button>
     </div>
-
-    <div id="langPanel">
-      <select id="lang">
-        <option value="en">English</option>
-        <option value="ru">Русский</option>
-        <option value="pt">Português</option>
-      </select>
+    <div id="phase"></div>
+    <div id="bottom">
+      <button id="pauseBtn">Pause</button>
     </div>
   </div>
+</div>
+
+<!-- END -->
+<div id="end" class="hidden">
+  <div>Exercise completed</div>
+  <button id="repeatBtn">Repeat</button>
+  <button id="menuBtn">Menu</button>
+</div>
 
 </div>
 
@@ -147,70 +133,85 @@ select{
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ================= TEXT ================= */
-const TEXT={
-  en:"Lift your cheeks into a wide grin",
-  ru:"Поднимите щёки в широкую улыбку",
-  pt:"Levante as bochechas em um sorriso largo"
-};
-let lang="en";
-
 /* ================= STATE ================= */
-let running=false;
-let paused=false;
+let screen="MENU";
+let phase="demo"; // demo → perform → hold
 let timeLeft=15;
-let timerId=null;
+let paused=false;
+let timer;
 
-/* ================= SMILE ANALYSIS ================= */
-class SmileAnalyzer{
-  constructor(){
-    this.base=null;
-    this.ema=0;
-    this.alpha=0.15;
-    this.start=performance.now();
-  }
-  reset(){
-    this.base=null;
-    this.ema=0;
-    this.start=performance.now();
-  }
-  update(lm){
-    const L=lm[61],R=lm[291];
-    const d=Math.hypot(L.x-R.x,L.y-R.y);
+/* ================= ELEMENTS ================= */
+const menu=document.getElementById("menu");
+const exercise=document.getElementById("exercise");
+const end=document.getElementById("end");
+const timerEl=document.getElementById("timer");
+const phaseEl=document.getElementById("phase");
 
-    if(!this.base && performance.now()-this.start<700){
-      this.base=this.base?(this.base+d)/2:d;
-      return 0;
-    }
-    if(!this.base)this.base=d;
-
-    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
-    const ratio=this.ema/this.base;
-    return Math.min(Math.max((ratio-1)/0.25,0),1);
-  }
+/* ================= SCREEN SWITCH ================= */
+function show(s){
+  screen=s;
+  menu.classList.toggle("hidden",s!=="MENU");
+  exercise.classList.toggle("hidden",s!=="EXERCISE");
+  end.classList.toggle("hidden",s!=="END");
 }
-const smile=new SmileAnalyzer();
 
-/* ================= REFERENCE DRAW ================= */
+/* ================= REFERENCE ================= */
 const refCtx=document.getElementById("refCanvas").getContext("2d");
-function drawReference(){
+let demoT=0;
+
+function drawReference(progress){
   refCtx.clearRect(0,0,300,300);
+
   refCtx.strokeStyle="#444";
   refCtx.lineWidth=2;
   refCtx.beginPath();
   refCtx.arc(150,150,90,0,Math.PI*2);
   refCtx.stroke();
 
+  let p=progress;
+  if(phase==="demo"){
+    demoT+=0.03;
+    p=(Math.sin(demoT)+1)/2;
+  }
+
   refCtx.strokeStyle="#c44";
   refCtx.beginPath();
-  refCtx.arc(150,170,50,0,Math.PI);
+  refCtx.arc(150,170,50,0,Math.PI*p);
   refCtx.stroke();
 }
-drawReference();
 
-/* ================= OVERLAY ================= */
+/* ================= SMILE ANALYZER ================= */
+class Smile{
+  constructor(){
+    this.base=null;
+    this.ema=0;
+    this.alpha=0.15;
+    this.t0=performance.now();
+  }
+  reset(){
+    this.base=null;
+    this.ema=0;
+    this.t0=performance.now();
+  }
+  value(lm){
+    const L=lm[61],R=lm[291];
+    const d=Math.hypot(L.x-R.x,L.y-R.y);
+    if(!this.base && performance.now()-this.t0<700){
+      this.base=this.base?(this.base+d)/2:d;
+      return 0;
+    }
+    this.base??=d;
+    this.ema=this.ema?this.ema+this.alpha*(d-this.ema):d;
+    return Math.min(Math.max((this.ema/this.base-1)/0.25,0),1);
+  }
+}
+const smile=new Smile();
+
+/* ================= CAMERA ================= */
+const video=document.getElementById("video");
 const overlay=document.getElementById("overlay");
 const octx=overlay.getContext("2d");
+
 function resize(){
   overlay.width=overlay.clientWidth;
   overlay.height=overlay.clientHeight;
@@ -218,69 +219,6 @@ function resize(){
 window.addEventListener("resize",resize);
 resize();
 
-function drawSmileGuide(lm,p){
-  if(!running)return;
-  const L=lm[61],R=lm[291];
-  const x1=L.x*overlay.width;
-  const x2=R.x*overlay.width;
-  const y=(L.y+R.y)/2*overlay.height;
-
-  octx.strokeStyle=`rgba(255,255,255,${0.2+0.6*p})`;
-  octx.lineWidth=3;
-  octx.beginPath();
-  octx.arc((x1+x2)/2,y,(x2-x1)/2,0,Math.PI);
-  octx.stroke();
-}
-
-/* ================= TIMER ================= */
-function startTimer(){
-  timeLeft=15;
-  document.getElementById("timer").textContent="00:15";
-  timerId=setInterval(()=>{
-    if(paused)return;
-    timeLeft--;
-    document.getElementById("timer").textContent=
-      "00:"+String(timeLeft).padStart(2,"0");
-    if(timeLeft<=0) stopExercise();
-  },1000);
-}
-function stopExercise(){
-  running=false;
-  paused=false;
-  clearInterval(timerId);
-  document.getElementById("startBtn").disabled=false;
-  document.getElementById("pauseBtn").disabled=true;
-  document.getElementById("instruction").style.opacity=0;
-}
-
-/* ================= UI ================= */
-document.getElementById("startBtn").onclick=()=>{
-  smile.reset();
-  running=true;
-  paused=false;
-  startTimer();
-  document.getElementById("startBtn").disabled=true;
-  document.getElementById("pauseBtn").disabled=false;
-  document.getElementById("instruction").textContent=TEXT[lang];
-  document.getElementById("instruction").style.opacity=1;
-};
-document.getElementById("pauseBtn").onclick=()=>{
-  paused=!paused;
-};
-document.getElementById("backBtn").onclick=()=>{
-  stopExercise();
-};
-
-document.getElementById("langBtn").onclick=()=>{
-  const p=document.getElementById("langPanel");
-  p.style.display=p.style.display==="block"?"none":"block";
-};
-document.getElementById("lang").onchange=e=>{
-  lang=e.target.value;
-};
-
-/* ================= FACE MESH ================= */
-const video=document.getElementById("video");
 const mesh=new FaceMesh({
   locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
 });
@@ -292,16 +230,66 @@ mesh.setOptions({
 });
 mesh.onResults(r=>{
   octx.clearRect(0,0,overlay.width,overlay.height);
-  if(!running||paused||!r.multiFaceLandmarks)return;
+  if(screen!=="EXERCISE"||paused||!r.multiFaceLandmarks)return;
+
   const lm=r.multiFaceLandmarks[0];
-  const p=smile.update(lm);
-  drawSmileGuide(lm,p);
+  const p=smile.value(lm);
+
+  drawReference(p);
+
+  if(phase!=="demo"){
+    const L=lm[61],R=lm[291];
+    const x1=L.x*overlay.width;
+    const x2=R.x*overlay.width;
+    const y=(L.y+R.y)/2*overlay.height;
+    octx.strokeStyle=`rgba(255,255,255,${0.3+0.5*p})`;
+    octx.lineWidth=3;
+    octx.beginPath();
+    octx.arc((x1+x2)/2,y,(x2-x1)/2,0,Math.PI);
+    octx.stroke();
+  }
 });
+
 new Camera(video,{
   facingMode:"user",
   onFrame:async()=>mesh.send({image:video})
 }).start();
-</script>
 
+/* ================= TIMER ================= */
+function startExercise(){
+  show("EXERCISE");
+  phase="demo";
+  timeLeft=15;
+  paused=false;
+  demoT=0;
+  smile.reset();
+  timerEl.textContent=timeLeft;
+  phaseEl.textContent="Watch";
+  clearInterval(timer);
+
+  timer=setInterval(()=>{
+    if(paused)return;
+    timeLeft--;
+    timerEl.textContent=timeLeft;
+
+    if(timeLeft===11){phase="perform";phaseEl.textContent="Do it";}
+    if(timeLeft===5){phase="hold";phaseEl.textContent="Hold";}
+    if(timeLeft<=0) finish();
+  },1000);
+}
+
+function finish(){
+  clearInterval(timer);
+  show("END");
+}
+
+/* ================= UI ================= */
+document.getElementById("startBtn").onclick=startExercise;
+document.getElementById("backBtn").onclick=()=>{clearInterval(timer);show("MENU");};
+document.getElementById("pauseBtn").onclick=()=>paused=!paused;
+document.getElementById("repeatBtn").onclick=startExercise;
+document.getElementById("menuBtn").onclick=()=>show("MENU");
+
+</script>
 </body>
 </html>
