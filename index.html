@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-<title>Smile Lens</title>
+<title>Smile Mirror</title>
 
 <style>
 html,body{
   margin:0;
   padding:0;
-  background:#05060a;
+  background:#0a0b10;
   overflow:hidden;
 }
 video,canvas{
@@ -36,7 +36,7 @@ class SmileAnalyzer{
   constructor(){
     this.base=null;
     this.ema=0;
-    this.alpha=0.18;
+    this.alpha=0.15;
     this.t0=performance.now();
     this.hold=0;
   }
@@ -54,9 +54,9 @@ class SmileAnalyzer{
     const ratio=this.ema/this.base;
 
     if(ratio>1.12){
-      this.hold=Math.min(this.hold+0.015,1);
+      this.hold=Math.min(this.hold+0.01,1);
     }else{
-      this.hold=Math.max(this.hold-0.03,0);
+      this.hold=Math.max(this.hold-0.02,0);
     }
     return this.hold;
   }
@@ -72,53 +72,41 @@ function resize(){
 resize();
 addEventListener("resize",resize);
 
-let energyPhase=0;
-let burst=0;
+function drawSmileMask(lm,progress){
+  if(progress<=0)return;
 
-function drawInnerLight(x,y,p){
-  if(p<0.05)return;
-  const r=100+200*p;
-  const g=ctx.createRadialGradient(x,y,r*0.2,x,y,r);
-  g.addColorStop(0,`rgba(255,255,255,${0.25*p})`);
-  g.addColorStop(0.5,`rgba(180,210,255,${0.18*p})`);
-  g.addColorStop(1,"rgba(180,210,255,0)");
-  ctx.fillStyle=g;
-  ctx.beginPath();
-  ctx.arc(x,y,r,0,Math.PI*2);
-  ctx.fill();
-}
+  const left=lm[61], right=lm[291];
+  const top=lm[13], bottom=lm[14];
 
-function drawEnergyArcs(x,y,p){
-  if(p<0.2)return;
-  energyPhase+=0.05;
-  ctx.strokeStyle=`rgba(200,220,255,${0.4*p})`;
+  const lx=left.x*canvas.width;
+  const rx=right.x*canvas.width;
+  const ty=top.y*canvas.height;
+  const by=bottom.y*canvas.height;
+
+  const cx=(lx+rx)/2;
+  const cy=(ty+by)/2;
+  const w=(rx-lx)*1.4;
+  const h=(by-ty)*1.6;
+
+  ctx.save();
+  ctx.globalAlpha=0.25+0.35*progress;
+  ctx.strokeStyle="rgba(200,220,255,0.9)";
   ctx.lineWidth=2;
-  for(let i=0;i<3;i++){
-    const a=energyPhase+i*2;
-    const r=180+Math.sin(a*1.3)*20;
-    ctx.beginPath();
-    ctx.arc(x,y,r,a,a+Math.PI*0.6);
-    ctx.stroke();
-  }
-}
 
-function drawSmileRing(x,y,p){
-  if(p<=0)return;
-  ctx.strokeStyle=`rgba(255,255,255,${0.7*p})`;
-  ctx.lineWidth=4;
   ctx.beginPath();
-  ctx.arc(
-    x,y,240,
-    -Math.PI/2,
-    -Math.PI/2 + Math.PI*2*p
-  );
+  ctx.ellipse(cx,cy,w/2,h/2,0,0,Math.PI*2);
   ctx.stroke();
+
+  ctx.restore();
 }
 
-function drawCompletion(x,y){
-  burst+=0.05;
-  const r=300*burst;
-  ctx.fillStyle=`rgba(255,255,255,${0.3*(1-burst)})`;
+function drawMatchGlow(x,y,p){
+  if(p<0.6)return;
+  const r=140+120*p;
+  const g=ctx.createRadialGradient(x,y,r*0.3,x,y,r);
+  g.addColorStop(0,`rgba(255,255,255,${0.25*(p-0.6)})`);
+  g.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle=g;
   ctx.beginPath();
   ctx.arc(x,y,r,0,Math.PI*2);
   ctx.fill();
@@ -148,19 +136,12 @@ mesh.onResults(r=>{
   const lm=r.multiFaceLandmarks[0];
   const p=smile.update(lm);
 
+  drawSmileMask(lm,p);
+
   const cx=lm[1].x*canvas.width;
   const cy=lm[1].y*canvas.height;
 
-  drawInnerLight(cx,cy,p);
-  drawEnergyArcs(cx,cy,p);
-  drawSmileRing(cx,cy,p);
-
-  if(p>=1){
-    drawCompletion(cx,cy);
-    if(burst>1) burst=0;
-  }else{
-    burst=0;
-  }
+  drawMatchGlow(cx,cy,p);
 });
 
 const video=document.getElementById("video");
